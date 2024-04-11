@@ -170,8 +170,8 @@ def main(argv):
   prefill_times_ms = {k: v*1000 for k, v in prefill_times.items()}
   decode_time_ms = sum(dec_times) * 1000 / 10 / _BATCH_SIZE.value
 
-  import analyze_sharegpt
-  analyze_sharegpt.do_simulation(prefill_times_ms, decode_time_ms)
+  # import analyze_sharegpt
+  # analyze_sharegpt.do_simulation(prefill_times_ms, decode_time_ms)
 
 
 
