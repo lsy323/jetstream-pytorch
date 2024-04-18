@@ -522,6 +522,23 @@ class PyTorchEngine(engine_api.Engine):
           return self._load_from_safetensors(self.env.checkpoint_path)
       else:
         jax_weights = self._make_state_dict_jax(self.pt_model.state_dict())
+    # copied from convert_checkpoints.py, can be put into a common quant config file
+    _QUANTIZE_LINEAR_WEIGHTS = {
+        'attention.wq.weight',
+        'attention.wk.weight',
+        'attention.wv.weight',
+        'attention.wo.weight',
+        'feed_forward.w1.weight',
+        'feed_forward.w2.weight',
+        'feed_forward.w3.weight',
+        'output.weight',
+    }
+    # for key, value in jax_weights.items():
+    #   for qname in _QUANTIZE_LINEAR_WEIGHTS:
+    #     if key.endswith(qname):
+    #       print(f"cast weight {key} to int4.")
+    #       jax_weights[key] = value.astype(jnp.int4)
+    
     jax_weights = {
       key: jax.device_put(value, self.sharding_by_name(key))
       for key, value in jax_weights.items()

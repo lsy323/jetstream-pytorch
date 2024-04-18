@@ -132,8 +132,8 @@ def main(argv):
   prefill_times = {}
   slot = jnp.int32(1)
 
-  if _PROFILING_OUTPUT.value:
-    jax.profiler.start_trace(_PROFILING_OUTPUT.value)
+  # if _PROFILING_OUTPUT.value:
+  #   jax.profiler.start_trace(_PROFILING_OUTPUT.value)
   decode_state = engine.init_decode_state()
   for batch in MAXTEXT_PREFILL.keys():
     runtime, decode_state = run_prefill_time(engine, params, decode_state, batch)
@@ -150,6 +150,9 @@ def main(argv):
   print('======= decode starting ===')
   dec_times = []
   for i in range(10):
+    if i == 7:
+      if _PROFILING_OUTPUT.value:
+        jax.profiler.start_trace(_PROFILING_OUTPUT.value)
     start = time.perf_counter()
     decode_state, sampled_tokens = engine.generate(
       params, decode_state

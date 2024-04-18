@@ -23,7 +23,75 @@ from torch import nn
 import torch.nn.functional as F
 import jax
 import jax.numpy as jnp
+from jax import lax
 import torch_xla2
+
+
+
+
+JTensor = jnp.ndarray
+
+def unpack_4bit(
+    packed: JTensor, pack_dim: int, original_dtype: jnp.dtype
+) -> JTensor:
+  """Unpack int32/int8 tensor packed by pack_4bit() to uint8/int8 tensor.
+
+  Args:
+    packed: int32 or int8 tensor that was packed by pack_4bit() function.
+    pack_dim: Dimension that was used to pack along. pack_dim must be <
+      packed.ndim - 1.
+    original_dtype: dtype of the original tensor that was packed by pack_4bit()
+      function. Must be either int8 or uint8.
+
+  Returns:
+    uint8/int8 unpack tensor where the pack_dim size is multiplied by 8/2 from
+    the packed tensor. Which means that the returned shape is identical to the
+    original shape before pack_4bit().
+    Note that original input to pack_4bit() is int8 or uint8, so the unpacked
+    tensor returned by unpack_4bit() is uint8/int8 with same values
+    and shape of the original tensor.
+  """
+  if packed.dtype != jnp.int32 and packed.dtype != jnp.int8:
+    raise ValueError(
+        f'packed dtype must be either int32 or int8. Given {packed.dtype}'
+    )
+  if original_dtype != jnp.int8 and original_dtype != jnp.uint8:
+    raise ValueError(
+        f'original_dtype must be either int8 or uint8. Given {original_dtype}'
+    )
+  if pack_dim >= packed.ndim - 1:
+    raise ValueError(
+        f'pack_dim must be < input ndim - 1. input shape {packed.shape} and'
+        f' pack_dim {pack_dim}'
+    )
+
+  packet_type_bits = 32 if packed.dtype == jnp.int32 else 8
+  int4s_per_packed_type = packet_type_bits // 4
+
+  rep_shape = list(packed.shape)
+  rep_shape.insert(pack_dim + 1, int4s_per_packed_type)
+  rep = jnp.broadcast_to(jnp.expand_dims(packed, pack_dim + 1), rep_shape)
+  shifts = lax.broadcasted_iota(packed.dtype, rep_shape, pack_dim + 1)
+
+  rep = lax.collapse(rep, pack_dim, pack_dim + 2)
+  shifts = lax.collapse(shifts, pack_dim, pack_dim + 2)
+  # Invert shifts table:
+  # 0,1 -> 1,0 for int8
+  # 0..7 -> 7..0 for int32
+  shifts = int4s_per_packed_type - 1 - shifts
+  # Multiply shifts table by 4
+  shifts <<= 2
+  rep <<= shifts
+  if jnp.issubdtype(original_dtype, jnp.signedinteger):
+    # Arithmetic shift is required to repsect negative numbers
+    return lax.shift_right_arithmetic(
+        rep, jnp.array(packet_type_bits - 4, packed.dtype)
+    ).astype(original_dtype)
+  else:
+    return lax.shift_right_logical(
+        rep, jnp.array(packet_type_bits - 4, packed.dtype)
+    ).astype(original_dtype)
+
 
 class Int8Embedding(torch.nn.Module):
 
@@ -50,9 +118,15 @@ class WeightOnlyInt8Linear(torch.nn.Module):
     super().__init__()
     self.in_features = in_features
     self.out_features = out_features
+    
+    self.int4_packed = False
 
-    weight = torch.ones((out_features, in_features), 
-      dtype=torch.int8, device=device)
+    if self.int4_packed:
+      weight = torch.ones((out_features // 8, in_features), 
+        dtype=torch.int32, device=device)
+    else:
+      weight = torch.ones((out_features, in_features), 
+        dtype=torch.int8, device=device)
     self.register_buffer('weight', weight)
 
     weight_scaler = torch.ones((out_features, ), 
@@ -67,7 +141,13 @@ class WeightOnlyInt8Linear(torch.nn.Module):
     #   self.register_parameter('bias', None)
 
   def forward(self, inputs):
-    return F.linear(inputs, self.weight) * self.weight_scaler
+    if self.int4_packed:
+      j_weight = self.weight._elem
+      j_unpacked_w = unpack_4bit(j_weight, 0, jnp.int8)
+      unpacked_w = torch_xla2.tensor.XLATensor2(j_unpacked_w)
+      return F.linear(inputs, unpacked_w) * self.weight_scaler
+    else:
+      return F.linear(inputs, self.weight) * self.weight_scaler
 
 
 class WeightOnlyInt4Linear(torch.nn.Module):
@@ -98,7 +178,6 @@ class WeightOnlyInt4Linear(torch.nn.Module):
     self.j_weight_scaler = jnp.ones((n_blocks, out_features)).astype(jnp.bfloat16)
 
   def forward(self, inputs):
-    print(inputs.shape)
     
     if self.use_dot_general:
       j_inputs = inputs._elem
