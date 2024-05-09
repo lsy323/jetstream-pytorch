@@ -58,7 +58,7 @@ def get_arg(
         "dim": 4096,
         "multiple_of": 256,
         "n_heads": 32,
-        "n_layers": 32,
+        "n_layers": 1,
         "norm_eps": 1e-05,
     }
   elif param_size == "13b":

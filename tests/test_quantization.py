@@ -16,10 +16,17 @@ import jax
 import unittest
 from jetstream_pt import cache_manager
 from jetstream_pt import quantize
+from jetstream_pt.layers import WeightOnlyInt4Linear
 import torch
 import torch_xla2
 import jax.numpy as jnp
+from torch_xla2 import tensor
+from torch.utils import _pytree as pytree
 
+import jax.sharding as jsharding
+from jax.experimental import mesh_utils
+
+key = jax.random.PRNGKey(12345)
 
 class QuantizationTest(unittest.TestCase):
 
@@ -61,8 +68,65 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue(jnp.allclose(k._elem, new_k._elem[:, :, 57:58, :], atol=0.1))
             self.assertTrue(jnp.allclose(v._elem, new_v._elem[:, :, 57:58, :], atol=0.1))
 
+    def test_int4_quantized_layer(self):
+
+        def get_sharding_spec():
+            num_of_partitions = jax.device_count()
+            mesh = jsharding.Mesh(
+                mesh_utils.create_device_mesh((num_of_partitions, 1)),
+                axis_names=("x", "y"),
+            )
+            sharding = ["x", None]
+            sharding_spec = jsharding.NamedSharding(mesh,
+                                jax.sharding.PartitionSpec(*sharding))
+            return sharding_spec
+        
+        def _move_weight_to_jax(state_dict):
+            def make_array(t):
+                res = jax.random.normal(
+                    jax.random.key(0), shape=t.shape, dtype=jnp.bfloat16)
+                res = res.astype(torch_xla2.tensor.t2j_dtype(t.dtype))
+                return res
+            return pytree.tree_map_only(torch.Tensor, make_array, state_dict)
+
+        layer = WeightOnlyInt4Linear(1024, 2048, False, "meta")
+        
+        @jax.jit
+        def f(weights, args):
+            paramst, argst = torch_xla2.tensor.wrap((weights, args))
+            with torch_xla2.tensor.XLADispatchMode():
+                res = torch.func.functional_call(layer, paramst, argst)[0]
+            return torch_xla2.tensor.unwrap(res)
+
+        state_dict_jax = _move_weight_to_jax(layer.state_dict())
+        for k, v in state_dict_jax.items():
+            if k == "weight":
+                print(f"cast weight {k} to int4.")
+                state_dict_jax[k] = v.astype(jnp.int4)
+                # state_dict_jax[k] = jax.device_put(v, get_sharding_spec())
+        input = jax.random.normal(key, shape=(2, 32, 1024), dtype=jnp.bfloat16)
+        # input = jax.device_put(input, get_sharding_spec())
+        # out = f(state_dict_jax, input)
+        print(f.lower(state_dict_jax, input).as_text("hlo"))
+        print(f.lower(state_dict_jax, input).compile().as_text())
+
+    def test_sharding_spec(self):
+        
+        num_of_partitions = jax.device_count()
+        mesh = jsharding.Mesh(
+             mesh_utils.create_device_mesh((num_of_partitions, 1)),
+             axis_names=("x", "y"),
+        )
+        
+        axis = 1
+        sharding = [None] * (axis + 1)
+        sharding[axis] = "x"
+        sharding = [None, "x", None]
+        sharding_spec = jsharding.NamedSharding(mesh,
+                            jax.sharding.PartitionSpec(*sharding))
+        print(sharding_spec)
+        
 
 
-            
 if __name__ == '__main__':
     unittest.main()

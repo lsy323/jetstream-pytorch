@@ -113,6 +113,10 @@ class JetEngineEnvironment:
         sharding_spec = self.sharding_by_axis(axis)
         tensor._elem = jax.lax.with_sharding_constraint(tensor._elem, sharding_spec)
 
+    def int4_weight_sharding(self):
+        sharding_spec = jsharding.NamedSharding(self._mesh, jax.sharding.PartitionSpec(None,None,"x"))
+        return sharding_spec
+        
     def sharding_by_axis(self, axis):
         if axis == -1 or axis is None:
             return jsharding.NamedSharding(self._mesh, jax.sharding.PartitionSpec())

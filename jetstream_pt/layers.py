@@ -150,6 +150,78 @@ class WeightOnlyInt8Linear(torch.nn.Module):
       return F.linear(inputs, self.weight) * self.weight_scaler
 
 
+# class WeightOnlyInt4Linear(torch.nn.Module):
+
+#   def __init__(self, in_features, out_features, bias, device):
+#     super().__init__()
+#     self.in_features = in_features
+#     self.out_features = out_features
+
+#     # weight = torch.ones((out_features, in_features), 
+#     #   dtype=torch.int8, device=device)
+#     # self.register_buffer('weight', weight)
+
+#     self.use_dot_general = True
+#     self.flatten = True
+
+#     block_size = 128
+#     n_blocks = in_features // block_size
+
+#     if self.use_dot_general:
+#       self.j_weight = jnp.ones((n_blocks, out_features, block_size)).astype(jnp.int4)
+#     else:
+#       self.j_weight = jnp.ones((n_blocks, block_size, out_features)).astype(jnp.int4)
+
+#     # weight_scaler = torch.ones((out_features, ), 
+#     #   dtype=torch.bfloat16, device=device)
+#     # self.register_buffer('weight_scaler', weight_scaler)
+#     self.j_weight_scaler = jnp.ones((n_blocks, out_features)).astype(jnp.bfloat16)
+
+#   def forward(self, inputs):
+    
+#     if self.use_dot_general:
+#       j_inputs = inputs._elem
+#       j_weight = self.j_weight
+#       j_weight_scaler = self.j_weight_scaler
+#       j_inputs_shape = j_inputs.shape
+#       block_size = j_weight.shape[2]
+#       bs = j_inputs_shape[0]
+#       j_inputs_new_shape = j_inputs_shape[:-1] + (j_inputs_shape[-1] // block_size, block_size)
+#       j_inputs = j_inputs.reshape(j_inputs_new_shape)
+#       j_inputs = jax.lax.collapse(j_inputs, 0, 2)
+#       out = jax.lax.dot_general(j_inputs, j_weight, dimension_numbers=([(2), (2)], [(1), (0)]))
+#       out = jax.lax.dot_general(out, j_weight_scaler, dimension_numbers=([(0), (0)], [(2), (1)]))
+#       out = jax.lax.transpose(out, [1, 0])
+#       out = out.reshape((bs, -1) + out.shape[1:])
+#       return torch_xla2.tensor.XLATensor2(out)
+    
+#     if self.flatten: # Not useful
+#       j_inputs = inputs._elem
+#       j_weight = self.j_weight.astype(jnp.int8)
+#       j_weight_scaler = self.j_weight_scaler
+#       block_size = j_weight.shape[1]
+#       j_inputs_shape = j_inputs.shape
+#       bs = j_inputs_shape[0]
+#       j_inputs_new_shape = j_inputs_shape[:-1] + (j_inputs_shape[-1] // block_size, block_size)
+#       j_inputs = j_inputs.reshape(j_inputs_new_shape)
+#       j_inputs = jax.lax.collapse(j_inputs, 0, 2)
+#       out = jnp.einsum('scz,bsc->bsz', j_weight, j_inputs)
+#       out = jnp.einsum('bsz,sz->bz', out, j_weight_scaler)
+#       out = out.reshape((bs, -1) + out.shape[1:])
+#       return torch_xla2.tensor.XLATensor2(out)
+#     else:
+#       j_inputs = inputs._elem
+#       j_weight = self.j_weight.astype(jnp.int8)
+#       j_weight_scaler = self.j_weight_scaler
+#       block_size = j_weight.shape[1]
+#       j_inputs_shape = j_inputs.shape
+#       j_inputs_new_shape = j_inputs_shape[:-1] + (j_inputs_shape[-1] // block_size, block_size)
+#       j_inputs = j_inputs.reshape(j_inputs_new_shape)
+#       out = jnp.einsum('scz,bdsc->bdsz', j_weight, j_inputs)
+#       out = jnp.einsum('bdsz,sz->bdz', out, j_weight_scaler)
+#       return torch_xla2.tensor.XLATensor2(out)
+
+
 class WeightOnlyInt4Linear(torch.nn.Module):
 
   def __init__(self, in_features, out_features, bias, device):
@@ -161,21 +233,22 @@ class WeightOnlyInt4Linear(torch.nn.Module):
     #   dtype=torch.int8, device=device)
     # self.register_buffer('weight', weight)
 
-    self.use_dot_general = True
-    self.flatten = True
+    self.use_dot_general = False
+    self.flatten = False
 
     block_size = 128
     n_blocks = in_features // block_size
 
     if self.use_dot_general:
-      self.j_weight = jnp.ones((n_blocks, out_features, block_size)).astype(jnp.int4)
+      weight = torch.ones((n_blocks, out_features, block_size), dtype=torch.int8, device=device)
     else:
-      self.j_weight = jnp.ones((n_blocks, block_size, out_features)).astype(jnp.int4)
+      weight = torch.ones((n_blocks, block_size, out_features), 
+                  dtype=torch.int8, device=device)
+    self.register_buffer('weight', weight)
 
-    # weight_scaler = torch.ones((out_features, ), 
-    #   dtype=torch.bfloat16, device=device)
-    # self.register_buffer('weight_scaler', weight_scaler)
-    self.j_weight_scaler = jnp.ones((n_blocks, out_features)).astype(jnp.bfloat16)
+    weight_scaler = torch.ones((n_blocks, out_features), 
+      dtype=torch.bfloat16, device=device)
+    self.register_buffer('weight_scaler', weight_scaler)
 
   def forward(self, inputs):
     
@@ -211,8 +284,8 @@ class WeightOnlyInt4Linear(torch.nn.Module):
       return torch_xla2.tensor.XLATensor2(out)
     else:
       j_inputs = inputs._elem
-      j_weight = self.j_weight.astype(jnp.int8)
-      j_weight_scaler = self.j_weight_scaler
+      j_weight = self.weight._elem.astype(jnp.int8)
+      j_weight_scaler = self.weight_scaler._elem
       block_size = j_weight.shape[1]
       j_inputs_shape = j_inputs.shape
       j_inputs_new_shape = j_inputs_shape[:-1] + (j_inputs_shape[-1] // block_size, block_size)
@@ -296,8 +369,8 @@ class Attention(nn.Module):
 
     self.env = env
 
-    LinearLayer = WeightOnlyInt8Linear if args.quantize else nn.Linear
-    # LinearLayer = WeightOnlyInt4Linear if args.quantize else nn.Linear
+    # LinearLayer = WeightOnlyInt8Linear if args.quantize else nn.Linear
+    LinearLayer = WeightOnlyInt4Linear if args.quantize else nn.Linear
 
 
     self.wo = LinearLayer(
@@ -350,6 +423,11 @@ class Attention(nn.Module):
       mask: Optional[torch.Tensor],
       cache,
   ):
+    # print(f"check x shape: {x.shape}, dtype {x.dtype}")
+    # print(f"check freqs_cis shape: {freqs_cis.shape}, dtype {freqs_cis.dtype}")
+    # if mask is not None:
+    #   print(f"check mask shape: {mask.shape}, dtype {mask.dtype}")
+    # print(f"check x shape: {x.shape}, dtype {x.dtype}")
     # bsz, seqlen, _ = x.shape
     with jax.named_scope('attn_linear_before_cache'):
       bsz, seqlen = x.shape[0], x.shape[-2]

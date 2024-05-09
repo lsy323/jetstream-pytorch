@@ -80,6 +80,7 @@ class PyTorchEngine(engine_api.Engine):
     self.y_sharding = env.sharding_by_axis(1)
     self.x_sharding = env.sharding_by_axis(0)
     self.replicated = env.sharding_by_axis(-1) # replicated
+    self.int4_weight_sharding = env.int4_weight_sharding()
     self.cache_sharding = self.y_sharding
 
     self.prefill = jax.jit(self.prefill, out_shardings=self.get_prefix_destination_sharding())
@@ -104,12 +105,16 @@ class PyTorchEngine(engine_api.Engine):
     """
 
     if 'weight_scaler' in name:
-      return self.x_sharding
+      if "attention." in name and "wo" in name:
+        return self.y_sharding
+      else:
+        return self.x_sharding
     if "tok_embeddings." in name:
         return self.y_sharding
     if "attention." in name:
         if "wo" in name:
-            return self.y_sharding
+            # return self.y_sharding
+            return self.int4_weight_sharding
         else:
             return self.x_sharding
     if "feed_forward." in name:
@@ -533,11 +538,12 @@ class PyTorchEngine(engine_api.Engine):
         'feed_forward.w3.weight',
         'output.weight',
     }
-    # for key, value in jax_weights.items():
-    #   for qname in _QUANTIZE_LINEAR_WEIGHTS:
-    #     if key.endswith(qname):
-    #       print(f"cast weight {key} to int4.")
-    #       jax_weights[key] = value.astype(jnp.int4)
+    with jax.default_device(jax.devices('cpu')[0]):
+      for key, value in jax_weights.items():
+        for qname in _QUANTIZE_LINEAR_WEIGHTS:
+          if key.endswith(qname):
+            print(f"cast weight {key} to int4.")
+            jax_weights[key] = value.astype(jnp.int4)
     
     jax_weights = {
       key: jax.device_put(value, self.sharding_by_name(key))
