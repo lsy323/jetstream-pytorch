@@ -33,6 +33,7 @@ class QuantizationConfig:
   is_blockwise_weight: bool = False
   block_size_weight: int = 128
   is_symmetric_weight: bool = True
+  is_fp8_weight: bool = False
 
   enable_activation_quantization: bool = False
   enable_kv_quantization: bool = False

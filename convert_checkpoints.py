@@ -94,6 +94,7 @@ def _quantize_state_dict(
     weight_axis,
     n_bit,
     is_blockwise,
+    is_fp,
 ):
   updated_weights = {}
   block_size = 128 if is_blockwise else -1
@@ -107,6 +108,8 @@ def _quantize_state_dict(
       block_size = -1
       orig_n_bit = n_bit
       n_bit = 8
+      orig_fp = is_fp
+      is_fp = False
     else:
       name_suffix, qscale_name = _find_scale_name(name, linear_weight_map)
     if qscale_name != "":
@@ -115,9 +118,10 @@ def _quantize_state_dict(
           reduce_axis=(weight_axis(name),),
           n_bit=n_bit,
           block_size=block_size,
+          is_fp=is_fp
       )
       new_weights, scaler, _ = quantize.load_q_weight_helper(
-          new_weights, scaler, zp=None, block_size=block_size
+          new_weights, scaler, zp=None, block_size=block_size, is_fp=is_fp
       )
       updated_weights[name] = new_weights
       scale_name = name[: -len(name_suffix)] + qscale_name
@@ -125,6 +129,7 @@ def _quantize_state_dict(
       if is_embedding:
         block_size = orig_block_size
         n_bit = orig_n_bit
+        is_fp = orig_fp
   state_dict.update(updated_weights)
   for k, v in state_dict.items():
     if "layers" in k and "layers.0" not in k:
@@ -584,6 +589,7 @@ def main(argv) -> None:
     quantize_num_bits = 8 if "int8" in FLAGS.quantize_type else 4
     is_blockwise = "blockwise" in FLAGS.quantize_type
     weight_axis = lambda x: 0 if x in quantize_embedding_weight_map else -1
+    is_fp = "fp" in FLAGS.quantize_type
     start = time.perf_counter()
     state_dict = _quantize_state_dict(
         state_dict,
@@ -592,6 +598,7 @@ def main(argv) -> None:
         weight_axis,
         quantize_num_bits,
         is_blockwise,
+        is_fp,
     )
     end = time.perf_counter()
     print(f"Quantizing weights takes {end - start} seconds")

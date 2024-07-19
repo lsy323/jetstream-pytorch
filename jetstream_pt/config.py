@@ -57,6 +57,7 @@ _VALID_QUANTIZATION_TYPE = {
     "int4_per_channel",
     "int8_blockwise",
     "int4_blockwise",
+    "fp8",
 }
 
 flags.register_validator(
@@ -123,12 +124,13 @@ def create_quantization_config_from_flags():
   if not quantize_weights:
     return config
   config.enable_weight_quantization = True
-  config.num_bits_weight = 8 if "int8" in quantize_type else 4
+  config.num_bits_weight = 4 if "int4" in quantize_type else 8
   config.is_blockwise_weight = "blockwise" in quantize_type
 
   config.enable_activation_quantization = FLAGS.quantize_activation
 
   config.enable_kv_quantization = FLAGS.quantize_kv_cache
+  config.is_fp8_weight = FLAGS.quantize_type == "fp8"
   return config
 
 
@@ -155,7 +157,8 @@ def create_engine_from_config_flags():
         else None
     )
     if (
-        quant_config.enable_weight_quantization
+        not quant_config.is_fp8_weight
+        and quant_config.enable_weight_quantization
         and quant_config.is_blockwise_weight
     ):
       sharding_file_name += "-blockwise-quant"

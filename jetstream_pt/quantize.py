@@ -21,12 +21,28 @@ import torch
 EPS = 1e-5
 
 
+def quantize_fp8(t: torch.Tensor,
+                 dtype: "torch.dtype" = torch.float8_e4m3fn):
+  """
+  Quantize weight to fp8.
+
+  Only support per-tensor quantization now.
+  """
+  fp8_min = torch.finfo(dtype).min
+  fp8_max = torch.finfo(dtype).max
+  t = t.to(torch.float32)
+  abs_max = torch.max(torch.abs(t))
+  scale = abs_max / torch.finfo(torch.float8_e4m3fn).max
+  fp8_t = torch.clamp(t / scale, min=fp8_min, max=fp8_max)
+  return fp8_t.to(dtype), scale.to(torch.bfloat16), None
+
 def quantize_tensor(
     w: torch.Tensor,
     reduce_axis: Union[Tuple[int], int],
     n_bit: int = 8,
     symmetric: bool = True,
     block_size: int = -1,
+    is_fp: bool = False,
 ):
   """
   Quantize weight tensor w along 'reduce_axis'.
@@ -48,10 +64,15 @@ def quantize_tensor(
   if isinstance(reduce_axis, int):
     reduce_axis = (reduce_axis,)
 
+  if is_fp:
+    return quantize_fp8(w)
+
   if block_size > 0:
     axis = reduce_axis[0]
     w_shape = w.shape
     assert w_shape[axis] % block_size == 0
+    if axis < 0:
+      axis += len(w_shape)
     w = w.reshape(w_shape[:axis] + (-1, block_size) + w_shape[axis + 1 :])
     reduce_axis = axis + 1
 
@@ -83,9 +104,12 @@ def dequantize_tensor(w, scale, zero_point=None):
   return w * scale
 
 
-def load_q_weight_helper(w_q, scale, zp=None, block_size=-1):
+def load_q_weight_helper(w_q, scale, zp=None, block_size=-1, is_fp: bool = False):
   """Helper function to update the shape of quantized weight to match
   what quantized linear layer expects."""
+  if is_fp:
+    return w_q, scale, zp
+  
   if block_size < 0:
     w_q = w_q.to(torch.int8)
     if zp is not None:

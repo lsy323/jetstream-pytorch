@@ -148,7 +148,7 @@ class WeightOnlyPerChannelQuantizedLinear(torch.nn.Module):
             self.weight,
             (((2,), (1)), ((), ())),
             None,
-            jnp.int32.dtype,
+            jnp.bfloat16.dtype,
         )
       result = result * self.weight_scaler
       if self.quantize_activation:
@@ -168,6 +168,68 @@ class WeightOnlyPerChannelQuantizedLinear(torch.nn.Module):
           self.weight.to(torch.bfloat16), scaler, zero_point
       )
       return F.linear(inputs, w_dequantized)
+
+
+class Fp8QuantizedLinear(torch.nn.Module):
+
+  def __init__(
+      self,
+      in_features,
+      out_features,
+      bias=False,
+      device=None,
+      quant_config=QuantizationConfig(),
+  ):
+    super().__init__()
+    self.in_features = in_features
+    self.out_features = out_features
+
+    weight = torch.ones(
+        (out_features, in_features),
+        dtype=torch.float8_e5m2, device=device
+    )
+    self.register_buffer("weight", weight)
+
+    weight_scaler = torch.tensor(
+        1.0, dtype=torch.bfloat16, device=device
+    )
+    self.register_buffer("weight_scaler", weight_scaler)
+
+    assert not bias, "Quantized Linear doesn't support bias."
+
+    # Quantize activation
+    self.quantize_activation = quant_config.enable_activation_quantization
+
+    # Flag to enable dequantize weight first, then do matmul. Useful for debugging.
+    self.run_fake_quantize = False
+
+  # def _load_quantized_weights(self, w_q, scale, zp=None):
+  #   """
+  #   Load weights quantized by 'quantize_tensor'.
+  #   """
+  #   self.weight, self.weight_scaler, self.zero_point = load_q_weight_helper(
+  #       w_q, scale, zp, block_size=-1
+  #   )
+
+  # def quantize_weight_from_nn_linear(self, weight):
+  #   assert weight.dim() == 2, "Expect 2D weight from torch.nn.Linear."
+  #   assert weight.shape == (
+  #       self.out_features,
+  #       self.in_features,
+  #   ), f"Got unexpected weight of shape {weight.shape}, expected weight shape ({self.out_features}, {self.in_features})."
+  #   w_q, scale, zp = quantize_tensor(
+  #       weight, (1,), self.n_bit, self.is_symmetric_weight, block_size=-1
+  #   )
+  #   w_dq = dequantize_tensor(w_q, scale, zp)
+  #   self._load_quantized_weights(w_q, scale, zp)
+
+  def forward(self, inputs):
+    if not self.run_fake_quantize:
+      result = F.linear(inputs, self.weight.to(inputs.dtype))
+      result = result * self.weight_scaler
+      return result
+    else:
+      assert False, "Fake quantization is not implemented yet for fp8 linear."
 
 
 class WeightOnlyBlockwiseQuantizedLinear(torch.nn.Module):
@@ -291,7 +353,9 @@ class WeightOnlyBlockwiseQuantizedLinear(torch.nn.Module):
 def get_quantized_linear_layer(config: "QuantizationConfig"):
   if not config.enable_weight_quantization:
     return nn.Linear
-  if config.is_blockwise_weight:
+  if config.is_fp8_weight:
+    return Fp8QuantizedLinear
+  elif config.is_blockwise_weight:
     return WeightOnlyBlockwiseQuantizedLinear
   else:
     return WeightOnlyPerChannelQuantizedLinear

@@ -690,11 +690,11 @@ class PyTorchEngine(engine_api.Engine):
 
   def _load_from_safetensors(self, path):
     weights = {}
-    with safe_open(path, framework="flax", device="cpu") as f:
+    with safe_open(path, framework="pt", device="cpu") as f:
       for key, model_weights in self.pt_model.state_dict().items():
         if key == "freqs_cis":
           continue
-        weights[key] = f.get_tensor(key)
+        weights[key] = torch_xla2.tensor.t2j(f.get_tensor(key))
         assert tuple(model_weights.shape) == tuple(
             weights[key].shape
         ), f"key: {key} error: {model_weights.shape} != {weights[key].shape}"
