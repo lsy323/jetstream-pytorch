@@ -6,6 +6,7 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 from jax.experimental.shard_map import shard_map
+from jetstream_pt import torchjax
 
 import torch
 import torch.nn.functional as F
@@ -560,17 +561,32 @@ def ragged_mha(
 
 def dense_attention(xq, keys, values, k_scaler=None, v_scaler=None, mask=None):
   """The vanilla attention kernel implementation."""
-
-  bsz, _, _, head_dim = xq.shape
+  # breakpoint()
+  bsz, num_heads, _, head_dim = xq.shape
+  _, num_kv_heads, slen, _ = keys.shape
+  n_rep = num_heads // num_kv_heads
   with jax.named_scope("attn_mat1"):
     ## Attention start
-    # scores = torch.einsum(jnp.einsum, "ijkl,ikml->ikjm", xq, keys) / math.sqrt(self.head_dim)
-    scores = torch.einsum("ikjl,ikml->ikjm", xq, keys) / math.sqrt(head_dim)
+    if n_rep != 1:
+      # Decomp xq dimension
+      xq = xq.reshape(bsz, num_kv_heads, n_rep, *xq.shape[2:])
+      # scores = torch.einsum("inkjl,ikml->inkjm", xq, keys) / math.sqrt(head_dim)
+      scores = torchjax.call_jax(
+            jax.lax.dot_general,
+            xq,
+            keys,
+            (((4,), (3,)), ((0,1), (0,1))),
+        )
+      scores = scores.reshape(bsz, -1, *scores.shape[3:]) / math.sqrt(head_dim)
+
+      # Rep kv tensors
+      # keys = keys[:, :, None, :, :].expand(bsz, num_kv_heads, n_rep, slen, head_dim).reshape(bsz, num_kv_heads * n_rep, slen, head_dim)
+      # scores = torch.einsum("ikjl,ikml->ikjm", xq, keys) / math.sqrt(head_dim)
+    else:
+      scores = torch.einsum("ikjl,ikml->ikjm", xq, keys) / math.sqrt(head_dim)
     if k_scaler is not None:
       scores = scores * (k_scaler.reshape(bsz, 1, 1, keys.shape[2]))
     if mask is not None:
-      # if mask.shape != (1,1,16,16):
-      #   breakpoint()
       scores = scores + mask  # (bs, n_local_heads, seqlen, max_seqlen)
   with jax.named_scope("attn_soft"):
     scores = F.softmax(scores.float(), dim=-1).type_as(xq)
@@ -578,10 +594,23 @@ def dense_attention(xq, keys, values, k_scaler=None, v_scaler=None, mask=None):
       scores = scores * v_scaler.reshape((bsz, 1, 1, keys.shape[2]))
 
   with jax.named_scope("attn_mat2"):
-    # output = torch.einsum(
-    #    "ikjm,ikml->ikjl", scores, values
-    # )  # (bs, n_local_heads, seqlen, head_dim)
-    output = torch.einsum("ikjm,ikml->ikjl", scores, values)
+    if n_rep != 1:
+      # Decomp xq dimension
+      scores = scores.reshape(bsz, num_kv_heads, n_rep, *scores.shape[2:])
+      # output = torch.einsum("inkjm,ikml->inkjl", scores, values)
+      output = torchjax.call_jax(
+            jax.lax.dot_general,
+            scores,
+            values,
+            (((4,), (2,)), ((0,1), (0,1))),
+        )
+      output = output.reshape(bsz, -1, *output.shape[3:])
+
+      # Rep kv tensors
+      # values = values[:, :, None, :, :].expand(bsz, num_kv_heads, n_rep, slen, head_dim).reshape(bsz, num_kv_heads * n_rep, slen, head_dim)
+      # output = torch.einsum("ikjm,ikml->ikjl", scores, values)
+    else:
+      output = torch.einsum("ikjm,ikml->ikjl", scores, values)
   return output
 
 

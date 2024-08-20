@@ -111,6 +111,7 @@ class ModelComponentTest(unittest.TestCase):
     )
 
     seqlen = 32
+    # seqlen = 1
     batch = 1
     x = torch.randn(
         (batch, seqlen, model_arg.dim)

@@ -24,7 +24,7 @@ import jax.numpy as jnp
 # pylint: disable-next=all
 from absl import app, flags
 # pylint: disable-next=all
-from benchmarks import analyze_sharegpt
+# from benchmarks import analyze_sharegpt
 from jetstream_pt.config import FLAGS, create_engine_from_config_flags
 
 logging.getLogger().setLevel(logging.ERROR)
